@@ -2,31 +2,41 @@
 #
 # version.sh - print the version of the repository.
 #
-# The version is computed by versioner (see tools/versioner and
-# .versioner.json), so the version of a build and the version of a release
-# can never drift apart.
+# The version is derived from git tags (pattern vX.Y.Z). When HEAD is
+# exactly on a tag, that tag is the version; otherwise a describe-style
+# suffix is appended (e.g. v0.1.0-3-gdeadbee, with +dirty when the tree
+# is dirty). With no tags reachable, the version is 0.0.0-dev+<sha>.
 #
 # Usage:
 #   scripts/version.sh                 # prints "VERSION=<v>" and "TAG=<t>"
+#   scripts/version.sh --format text   # same as default
 #   scripts/version.sh --format shell  # prints "export VERSION=..." lines
-#   scripts/version.sh --format json   # prints the raw versioner json
-#
-# Environment:
-#   VERSIONER_BIN        Path to the versioner binary (default: via scripts/env.sh).
-#   VERSIONER_REPO_DIR   Repository to inspect (default: the repository root).
+#   scripts/version.sh --format json   # prints a small JSON document
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1091
-source "$SCRIPT_DIR/entry.sh"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/version.sh [--format text|shell|json]
+
+Print the repository version derived from git tags.
+
+  text   TAG=<tag> and VERSION=<version> lines (default)
+  shell  export TAG=... and export VERSION=... lines
+  json   a small JSON document with tag/version/commit/dirty
+EOF
+}
 
 FORMAT="text"
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --format)
         [[ $# -ge 2 ]] || {
-            log ERROR "--format requires a value"
+            echo "version.sh: --format requires a value" >&2
             exit 2
         }
         FORMAT="$2"
@@ -37,68 +47,57 @@ while [[ $# -gt 0 ]]; do
         shift
         ;;
     --help | -h)
-        cat <<'EOF'
-Usage: scripts/version.sh [--format text|shell|json]
-
-Print the version of the repository computed by versioner.
-
-  text   VERSION=<version> and TAG=<tag> lines (default)
-  shell  export VERSION=... and export TAG=... lines
-  json   the raw json document produced by versioner
-EOF
+        usage
         exit 0
         ;;
     *)
-        log ERROR "unknown argument: $1"
+        echo "version.sh: unknown argument: $1" >&2
+        usage >&2
         exit 2
         ;;
     esac
 done
 
-REPO_DIR="${VERSIONER_REPO_DIR:-${REPO_ROOT_DIR:-$SCRIPT_DIR/..}}"
-REPO_DIR="$(cd -- "$REPO_DIR" && pwd)"
-
-if [[ -z "${VERSIONER_BIN:-}" || ! -x "${VERSIONER_BIN:-}" ]]; then
-    log ERROR "no versioner binary found (run tools/versioner/update.sh or set VERSIONER_BIN)"
-    exit 1
+COMMIT="$(git rev-parse --short HEAD)"
+DIRTY="false"
+if [[ -n "$(git status --porcelain)" ]]; then
+    DIRTY="true"
 fi
 
-if [[ "$FORMAT" == "json" ]]; then
-    "$VERSIONER_BIN" --repo-dir "$REPO_DIR" --quiet --format json
-    exit 0
+EXACT_TAG="$(git describe --tags --exact-match --match 'v[0-9]*' HEAD 2>/dev/null || true)"
+if [[ -n "$EXACT_TAG" ]]; then
+    TAG="$EXACT_TAG"
+    if [[ "$DIRTY" == "true" ]]; then
+        TAG="${TAG}+dirty"
+    fi
+else
+    DESC="$(git describe --tags --match 'v[0-9]*' --abbrev=7 HEAD 2>/dev/null || true)"
+    if [[ -z "$DESC" ]]; then
+        TAG="v0.0.0-dev+$COMMIT"
+    else
+        TAG="$DESC"
+        if [[ "$DIRTY" == "true" ]]; then
+            TAG="${TAG}+dirty"
+        fi
+    fi
 fi
-
-OUTPUT="$("$VERSIONER_BIN" --repo-dir "$REPO_DIR" --quiet)"
-
-VERSION=""
-TAG=""
-while IFS= read -r line; do
-    case "$line" in
-    VERSION=*) VERSION="${line#VERSION=}" ;;
-    TAG=*) TAG="${line#TAG=}" ;;
-    esac
-done <<<"$OUTPUT"
-
-[[ -n "$VERSION" ]] || {
-    log ERROR "could not parse VERSION from the versioner output"
-    exit 1
-}
-[[ -n "$TAG" ]] || {
-    log ERROR "could not parse TAG from the versioner output"
-    exit 1
-}
+VERSION="${TAG#v}"
 
 case "$FORMAT" in
 text)
-    printf 'VERSION=%s\n' "$VERSION"
     printf 'TAG=%s\n' "$TAG"
+    printf 'VERSION=%s\n' "$VERSION"
     ;;
 shell)
-    printf 'export VERSION=%s\n' "$VERSION"
     printf 'export TAG=%s\n' "$TAG"
+    printf 'export VERSION=%s\n' "$VERSION"
+    ;;
+json)
+    printf '{"tag":"%s","version":"%s","commit":"%s","dirty":%s}\n' \
+        "$TAG" "$VERSION" "$COMMIT" "$DIRTY"
     ;;
 *)
-    log ERROR "unknown format: $FORMAT (expected text, shell or json)"
+    echo "version.sh: unknown format: $FORMAT (expected text, shell or json)" >&2
     exit 2
     ;;
 esac

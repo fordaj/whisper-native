@@ -1,165 +1,226 @@
 #!/usr/bin/env bash
+# scripts/build.sh — cross-compile whisper.cpp executables for the six
+# release targets (CPU-only, generic baselines, no GPU backends).
+#
+# Builds the executables listed in WHISPER_EXECUTABLES
+# (scripts/.common.env) from the pinned upstream whisper.cpp submodule
+# (third_party/whisper.cpp), using upstream's CMake configuration —
+# no source files are listed or patched here.
+#
+# macOS targets use the native clang/clang++ driving CMake
+# (-arch x86_64 / arm64); the four Linux/Windows targets cross-compile
+# with Zig (`zig cc`/`zig c++`) via the toolchain files in
+# cmake/toolchains/. Linux targets are static musl builds.
+#
+# Usage:
+#   BUILD_MODE=release scripts/build.sh   # default
+#   BUILD_MODE=debug   scripts/build.sh
+#   CLEAN_BUILD=false  scripts/build.sh   # reuse cmake build dirs
+#   TARGETS="linux-x86_64 macos-arm64" scripts/build.sh   # subset
+#
+# Outputs: build/<mode>/<platform>/<executable>[.exe]
+
 set -euo pipefail
 
-(
-    # ============================================================
-    # Configuration
-    # ============================================================
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/entry.sh"
 
-    # Build mode: release or debug
-    BUILD_MODE="${BUILD_MODE:-release}"
+# ============================================================
+# Configuration
+# ============================================================
 
-    # Common compiler settings
-    CXX_STANDARD="c++20"
+BUILD_MODE="${BUILD_MODE:-release}"
+case "$BUILD_MODE" in
+release) CMAKE_BUILD_TYPE=Release ;;
+debug) CMAKE_BUILD_TYPE=Debug ;;
+*)
+    log ERROR "invalid BUILD_MODE='$BUILD_MODE' (use release or debug)"
+    exit 2
+    ;;
+esac
 
-    # Compilers
-    NATIVE_CXX="${NATIVE_CXX:-clang++}"
-    ZIG_CXX="${ZIG_CXX:-zig c++}"
+CLEAN_BUILD="${CLEAN_BUILD:-true}"
 
-    # Output behavior
-    CLEAN_BUILD="${CLEAN_BUILD:-true}"
+# Optional subset of targets: space-separated platform names.
+ALL_TARGETS="macos-x86_64 macos-arm64 windows-x86_64 windows-arm64 linux-x86_64 linux-arm64"
+TARGETS="${TARGETS:-$ALL_TARGETS}"
 
-    # Build flags
-    case "$BUILD_MODE" in
-    release)
-        BUILD_FLAGS=(-O2 -DNDEBUG)
+BUILD_ROOT="build/$BUILD_MODE"
+
+echo "============================================================"
+echo " whisper-native build"
+echo "============================================================"
+echo "Mode:      $BUILD_MODE (CMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE)"
+echo "Targets:   $TARGETS"
+echo "Clean:     $CLEAN_BUILD"
+echo "Upstream:  whisper.cpp $WHISPER_CPP_VERSION ($WHISPER_CPP_COMMIT)"
+echo "============================================================"
+echo
+
+# ============================================================
+# Verify the pinned upstream submodule
+# ============================================================
+verify_upstream() {
+    local dir="$REPO_ROOT/$WHISPER_CPP_DIR"
+    local head
+    if ! head="$(git -C "$dir" rev-parse HEAD 2>/dev/null)"; then
+        log ERROR "upstream submodule not initialized — run: git submodule update --init $WHISPER_CPP_DIR"
+        exit 1
+    fi
+    if [[ "$head" != "$WHISPER_CPP_COMMIT" ]]; then
+        log ERROR "upstream submodule at $head"
+        log ERROR "this repository pins whisper.cpp $WHISPER_CPP_VERSION ($WHISPER_CPP_COMMIT)"
+        log ERROR "run: git -C $WHISPER_CPP_DIR checkout $WHISPER_CPP_COMMIT"
+        exit 1
+    fi
+}
+verify_upstream
+
+# ============================================================
+# Common CMake configuration (CPU-only, generic baselines)
+#
+# GGML_NATIVE is OFF everywhere so no -march=native or host-specific
+# code paths leak into release artifacts. The per-ISA options are
+# pinned OFF for the same reason; the result is a plain baseline build
+# (x86-64 SSE2 on Intel/AMD, armv8 baseline on ARM64) on every target.
+# All GPU/acceleration backends are disabled. BUILD_SHARED_LIBS=OFF
+# keeps every executable self-contained (no bundled runtime libraries).
+# ============================================================
+COMMON_CMAKE_ARGS=(
+    "-DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE"
+    # Zig embeds debug info in default release compiles; keep release
+    # artifacts free of it (objects are otherwise optimized).
+    -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g0"
+    -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g0"
+
+    -DGGML_NATIVE=OFF
+    -DGGML_SSE42=OFF
+    -DGGML_AVX=OFF
+    -DGGML_AVX2=OFF
+    -DGGML_AVX512=OFF
+    -DGGML_FMA=OFF
+    -DGGML_F16C=OFF
+    -DGGML_BMI2=OFF
+    -DGGML_ACCELERATE=OFF
+    -DGGML_OPENMP=OFF
+    -DGGML_CCACHE=OFF
+    -DGGML_CUDA=OFF
+    -DGGML_HIP=OFF
+    -DGGML_VULKAN=OFF
+    -DGGML_METAL=OFF
+    -DGGML_OPENCL=OFF
+    -DWHISPER_COREML=OFF
+    -DWHISPER_CURL=OFF
+    -DWHISPER_SDL2=OFF
+    -DWHISPER_BUILD_TESTS=OFF
+    -DWHISPER_BUILD_EXAMPLES=ON
+    -DWHISPER_BUILD_SERVER=ON
+    -DWHISPER_BUILD_IS_DEV=OFF
+    -DBUILD_SHARED_LIBS=OFF
+)
+
+# ============================================================
+# Build helper
+# ============================================================
+build_target() {
+    local name="$1"
+    local platform="$2"
+    shift 2
+    local -a extra_cmake_args=("$@")
+
+    local output_dir="$BUILD_ROOT/$platform"
+    local work_dir="$output_dir/work"
+
+    echo "------------------------------------------------------------"
+    echo "Building: $name"
+    echo "Output:   $output_dir"
+    echo "------------------------------------------------------------"
+
+    if [[ "$CLEAN_BUILD" == "true" ]]; then
+        rm -rf -- "$output_dir"
+    fi
+    mkdir -p -- "$work_dir"
+
+    cmake -S "$WHISPER_CPP_DIR" -B "$work_dir" \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        "${extra_cmake_args[@]}"
+
+    local -a targets=()
+    for exe in $WHISPER_EXECUTABLES; do
+        targets+=("$exe")
+    done
+    cmake --build "$work_dir" --config "$CMAKE_BUILD_TYPE" --parallel \
+        --target "${targets[@]}"
+
+    # Flat output layout: build/<mode>/<platform>/<executable>[.exe]
+    local exe
+    for exe in $WHISPER_EXECUTABLES; do
+        local found=""
+        for cand in "$work_dir/bin/$exe" "$work_dir/bin/$exe.exe"; do
+            if [[ -f "$cand" ]]; then
+                found="$cand"
+                break
+            fi
+        done
+        if [[ -z "$found" ]]; then
+            log ERROR "expected executable not found: $work_dir/bin/$exe[.exe]"
+            exit 1
+        fi
+        cp -p "$found" "$output_dir/$(basename "$found")"
+    done
+
+    echo "SUCCESS: $name"
+    echo
+}
+
+# ============================================================
+# Targets
+# ============================================================
+for target in $TARGETS; do
+    case "$target" in
+    macos-x86_64)
+        build_target "macOS Intel x86-64" "macos-x86_64" \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
         ;;
-    debug)
-        BUILD_FLAGS=(-O0 -g3 -DDEBUG)
+    macos-arm64)
+        build_target "macOS Apple Silicon ARM64" "macos-arm64" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+        ;;
+    windows-x86_64)
+        build_target "Windows x86-64 (MinGW via Zig)" "windows-x86_64" \
+            -DCMAKE_TOOLCHAIN_FILE="$REPO_ROOT/cmake/toolchains/zig-windows-x86_64.cmake"
+        ;;
+    windows-arm64)
+        build_target "Windows ARM64 (MinGW via Zig)" "windows-arm64" \
+            -DCMAKE_TOOLCHAIN_FILE="$REPO_ROOT/cmake/toolchains/zig-windows-arm64.cmake"
+        ;;
+    linux-x86_64)
+        build_target "Linux x86-64 (musl, static, via Zig)" "linux-x86_64" \
+            -DCMAKE_TOOLCHAIN_FILE="$REPO_ROOT/cmake/toolchains/zig-linux-x86_64.cmake"
+        ;;
+    linux-arm64)
+        build_target "Linux ARM64 (musl, static, via Zig)" "linux-arm64" \
+            -DCMAKE_TOOLCHAIN_FILE="$REPO_ROOT/cmake/toolchains/zig-linux-arm64.cmake"
         ;;
     *)
-        echo "ERROR: Invalid BUILD_MODE='$BUILD_MODE' (use release or debug)" >&2
+        log ERROR "unknown target: $target (known: $ALL_TARGETS)"
         exit 2
         ;;
     esac
+done
 
-    # ============================================================
-    # Setup
-    # ============================================================
-
-    SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-    REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-    cd "$REPO_ROOT"
-
-    # Single source for TU list (see tools/sources.sh).
-    # shellcheck source=tools/sources.sh
-    source "$REPO_ROOT/tools/sources.sh"
-
-    # Dynamically generate .version/version.hpp from git history via
-    # the bundled fordaj/Versioner binary (see tools/generate_version.sh).
-    # Regenerated before every build so --version reflects HEAD; the
-    # .version/ directory is git-ignored. Compile with -I.version so
-    # #include "version.hpp" finds the generated header.
-    if [[ ! -x "$REPO_ROOT/tools/generate_version.sh" ]]; then
-        echo "ERROR: Missing tools/generate_version.sh" >&2
-        exit 1
-    fi
-    bash "$REPO_ROOT/tools/generate_version.sh"
-    echo
-
-    # All build outputs live under build/<mode>/<platform>/ so release
-    # and debug binaries never collide and the repo root stays clean
-    # (issue #1). For example: build/release/macos-arm64/logamuffin,
-    # build/debug/linux-x86_64/logamuffin.
-    BUILD_ROOT="build/$BUILD_MODE"
-
-    echo "============================================================"
-    echo " Logamuffin Build"
-    echo "============================================================"
-    echo "Mode:       $BUILD_MODE"
-    echo "C++:        $CXX_STANDARD"
-    echo "Flags:      ${BUILD_FLAGS[*]}"
-    echo "Clean:      $CLEAN_BUILD"
-    echo "Root:       $BUILD_ROOT"
-    echo "============================================================"
-    echo
-
-    # ============================================================
-    # Build helper
-    # ============================================================
-    build_target() {
-        local name="$1"
-        local output_dir="$2"
-        local compiler="$3"
-        local target="${4:-}"
-        local arch="${5:-}"
-        local output="$output_dir/logamuffin"
-
-        if [[ "$output_dir" == *windows-* ]]; then
-            output="${output}.exe"
-        fi
-
-        echo "------------------------------------------------------------"
-        echo "Building: $name"
-        echo "Output:   $output"
-        echo "------------------------------------------------------------"
-
-        if [[ "$CLEAN_BUILD" == "true" ]]; then
-            rm -rf -- "$output_dir"
-        fi
-        mkdir -p -- "$output_dir"
-
-        if [[ -n "$target" ]]; then
-            zig c++ \
-                -target "$target" \
-                -I.version \
-                "-std=$CXX_STANDARD" \
-                "${BUILD_FLAGS[@]}" \
-                "${SOURCES[@]}" \
-                -o "$output"
-        else
-            local -a arch_flags=()
-            if [[ -n "$arch" ]]; then
-                arch_flags=(-arch "$arch")
-            fi
-
-            "$compiler" \
-                "${arch_flags[@]}" \
-                -I.version \
-                "-std=$CXX_STANDARD" \
-                "${BUILD_FLAGS[@]}" \
-                "${SOURCES[@]}" \
-                -o "$output"
-        fi
-
-        echo "SUCCESS: $name"
-        echo
-    }
-
-    # ============================================================
-    # Targets
-    # ============================================================
-    build_target "macOS Intel x86-64" \
-        "$BUILD_ROOT/macos-x86_64" "$NATIVE_CXX" "" "x86_64"
-
-    build_target "macOS Apple Silicon ARM64" \
-        "$BUILD_ROOT/macos-arm64" "$NATIVE_CXX" "" "arm64"
-
-    build_target "Windows x86-64 (GNU)" \
-        "$BUILD_ROOT/windows-x86_64" "" "x86_64-windows-gnu"
-
-    build_target "Windows ARM64 (GNU)" \
-        "$BUILD_ROOT/windows-arm64" "" "aarch64-windows-gnu"
-
-    build_target "Linux x86-64 (musl)" \
-        "$BUILD_ROOT/linux-x86_64" "" "x86_64-linux-musl"
-
-    build_target "Linux ARM64 (musl)" \
-        "$BUILD_ROOT/linux-arm64" "" "aarch64-linux-musl"
-
-    # ============================================================
-    # Summary
-    # ============================================================
-
-    echo "============================================================"
-    echo " Build complete!"
-    echo "============================================================"
-    echo "Mode: $BUILD_MODE"
-    echo
-    find "$BUILD_ROOT/macos-x86_64" "$BUILD_ROOT/macos-arm64" \
-        "$BUILD_ROOT/windows-x86_64" "$BUILD_ROOT/windows-arm64" \
-        "$BUILD_ROOT/linux-x86_64" "$BUILD_ROOT/linux-arm64" \
-        -maxdepth 1 -type f -name 'logamuffin*' -print
-    echo
-
-)
+# ============================================================
+# Summary
+# ============================================================
+echo "============================================================"
+echo " Build complete!"
+echo "============================================================"
+for target in $TARGETS; do
+    find "$BUILD_ROOT/$target" -maxdepth 1 -type f -print | sort
+done
+echo

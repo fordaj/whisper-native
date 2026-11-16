@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: 0.17.0
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: macos-x86_64, runner: macos-13 }
+          - { target: macos-arm64, runner: macos-14 }
+          - { target: linux-x86_64, runner: ubuntu-latest }
+          - { target: linux-arm64, runner: ubuntu-latest }
+          - { target: windows-x86_64, runner: ubuntu-latest }
+          - { target: windows-arm64, runner: ubuntu-latest }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (with upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Zig (non-macOS targets)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)  platform=x86_64-linux ;;
+            Linux-aarch64|Linux-arm64) platform=aarch64-linux ;;
+            *) echo "unsupported CI platform: $(uname -s)-$(uname -m)" >&2; exit 2 ;;
+          esac
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-${platform}-${ZIG_VERSION}.tar.xz"
+          curl -fsSL --retry 3 -o zig.tar.xz "$url"
+          tar -xJf zig.tar.xz
+          echo "$PWD/zig-${platform}-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --version
+          if [[ "$(uname -s)" != "Darwin" ]]; then zig version; else clang++ --version; fi
+
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        run: BUILD_MODE=release TARGETS="${{ matrix.target }}" ./scripts/build.sh
+
+      - name: Smoke test (Linux x86_64)
+        if: matrix.target == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          file build/release/linux-x86_64/whisper-cli
+          build/release/linux-x86_64/whisper-cli --help >/dev/null
+          build/release/linux-x86_64/whisper-cli --version
+
+      - name: Upload executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-native-${{ matrix.target }}
+          path: |
+            build/release/${{ matrix.target }}/whisper-cli*
+            build/release/${{ matrix.target }}/whisper-server*
+          if-no-files-found: error
+          compression-level: 0
+
+  test-models:
+    name: Model smoke test (Linux x86_64)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (with upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download linux-x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-native-linux-x86_64
+          path: build/release/linux-x86_64
+
+      - name: Restore model cache
+        uses: actions/cache@v4
+        with:
+          path: build/models
+          key: whisper-models-tiny-tiny.en-v1
+
+      - name: Run model smoke tests (English + multilingual)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x build/release/linux-x86_64/whisper-cli
+          WHISPER_CLI="$PWD/build/release/linux-x86_64/whisper-cli" ./scripts/test_models.sh
+
+  release:
+    name: Release (tag)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, test-models]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (with upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform=x86_64-linux
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-${platform}-${ZIG_VERSION}.tar.xz"
+          curl -fsSL --retry 3 -o zig.tar.xz "$url"
+          tar -xJf zig.tar.xz
+          echo "$PWD/zig-${platform}-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Build, package and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/release.sh --from-tag

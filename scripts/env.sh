@@ -5,11 +5,7 @@
 #
 # Sources scripts/.common.env (the base cascade) followed by the
 # platform file scripts/.<os>-<arch>.env selected from `uname`
-# (for example .macos-x86_64.env). The cascade files define the
-# variables; this script only locates them, sources them, and
-# anchors the repository-relative tool paths (tools/...) to the
-# repository root so they resolve from any working directory.
-# Works in bash and zsh, sourced from any directory.
+# (for example .macos-x86_64.env). Works in bash and zsh.
 
 if [ -n "${BASH_VERSION:-}" ]; then
     _env_sh_path="${BASH_SOURCE[0]}"
@@ -22,6 +18,7 @@ else
 fi
 ENV_DIR="$(cd -- "$(dirname -- "$_env_sh_path")" && pwd)"
 REPO_ROOT_DIR="$(cd -- "$ENV_DIR/.." && pwd)"
+export REPO_ROOT_DIR
 unset _env_sh_path
 
 set -a
@@ -41,12 +38,4 @@ MINGW*:aarch64 | MSYS*:aarch64 | CYGWIN*:aarch64 | MINGW*:arm64 | MSYS*:arm64 | 
     return 1 2>/dev/null || exit 1
     ;;
 esac
-
-# Anchor the repository-relative tool binaries to the repo root.
-# Absolute paths are left untouched.
-case "${VERSIONER_BIN:-}" in "" | /*) ;; *) VERSIONER_BIN="$REPO_ROOT_DIR/$VERSIONER_BIN" ;; esac
-case "${LOGAMUFFIN_BIN:-}" in "" | /*) ;; *) LOGAMUFFIN_BIN="$REPO_ROOT_DIR/$LOGAMUFFIN_BIN" ;; esac
-case "${RUNNER_SPAWNER_BIN:-}" in "" | /*) ;; *) RUNNER_SPAWNER_BIN="$REPO_ROOT_DIR/$RUNNER_SPAWNER_BIN" ;; esac
-case "${BARNACLE_BIN:-}" in "" | /*) ;; *) BARNACLE_BIN="$REPO_ROOT_DIR/$BARNACLE_BIN" ;; esac
-
 set +a

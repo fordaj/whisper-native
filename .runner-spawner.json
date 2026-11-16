@@ -1,8 +1,0 @@
-{
-  "owner": "fordaj",
-  "repo": "logamuffin",
-  "runnerNames": ["runner01", "runner02"],
-  "runnersDir": ".runners",
-  "runnerGroup": "Default",
-  "runnerVersion": "2.338.2"
-}
