@@ -275,12 +275,13 @@ this way.
 
 ## Continuous integration & releases
 
-`.github/workflows/ci.yml` builds the same six targets on GitHub-hosted
-runners (Zig + CMake) and smoke-tests the Linux x86-64 binary against
-the upstream `jfk.wav` sample with the `ggml-tiny.en` model. Pushing a
-`vX.Y.Z` tag runs the release workflow, which rebuilds all six targets
-and creates a GitHub release with the archives and `checksums.txt`
-(via `scripts/release.sh --from-tag`).
+`.github/workflows/ci.yml` builds all six targets (four via Zig on
+GitHub-hosted Ubuntu runners, two macOS targets on the org's self-hosted
+macOS runner pool) and smoke-tests the Linux x86-64 binary against the
+upstream `jfk.wav` sample with the `ggml-tiny.en` model. Pushing a
+`vX.Y.Z` tag runs the release job, which rebuilds all six targets and
+creates a GitHub release with the archives and `checksums.txt` (via
+`scripts/release.sh --from-tag`).
 
 ## License and attribution
 

@@ -18,24 +18,17 @@ env:
   ZIG_VERSION: 0.17.0
 
 jobs:
-  build:
+  build-cross:
     name: Build (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          # GitHub-hosted macOS runners are not available for this
-          # repository (macos-14 jobs are cancelled immediately and
-          # macos-13 queues forever with no runner assigned), so macOS
-          # targets build on the org's self-hosted macOS pool — the
-          # same setup the logamuffin starting CI used.
-          - { target: macos-x86_64, runner: [self-hosted, macOS] }
-          - { target: macos-arm64, runner: [self-hosted, macOS] }
-          - { target: linux-x86_64, runner: ubuntu-latest }
-          - { target: linux-arm64, runner: ubuntu-latest }
-          - { target: windows-x86_64, runner: ubuntu-latest }
-          - { target: windows-arm64, runner: ubuntu-latest }
-    runs-on: ${{ matrix.runner }}
+          - { target: linux-x86_64 }
+          - { target: linux-arm64 }
+          - { target: windows-x86_64 }
+          - { target: windows-arm64 }
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout (with upstream submodule)
@@ -43,8 +36,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Zig (non-macOS targets)
-        if: runner.os != 'macOS'
+      - name: Install Zig
         shell: bash
         run: |
           set -euo pipefail
@@ -88,9 +80,52 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  build-macos:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # GitHub-hosted macOS runners are not available for this
+          # repository (macos-14 jobs are cancelled immediately with no
+          # runner assigned; macos-13 queues forever), so macOS targets
+          # build on the org's self-hosted macOS pool — the same setup
+          # the logamuffin starting CI used. These jobs stay queued
+          # until the runner group is granted access to this repo.
+          - { target: macos-x86_64, runner: [self-hosted, macOS] }
+          - { target: macos-arm64, runner: [self-hosted, macOS] }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (with upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --version
+          clang++ --version
+
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        run: BUILD_MODE=release TARGETS="${{ matrix.target }}" ./scripts/build.sh
+
+      - name: Upload executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-native-${{ matrix.target }}
+          path: |
+            build/release/${{ matrix.target }}/whisper-cli*
+            build/release/${{ matrix.target }}/whisper-server*
+          if-no-files-found: error
+          compression-level: 0
+
   test-models:
     name: Model smoke test (Linux x86_64)
-    needs: build
+    needs: build-cross
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -121,7 +156,7 @@ jobs:
   release:
     name: Release (tag)
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, test-models]
+    needs: [build-cross, build-macos, test-models]
     # The release job rebuilds all six targets (scripts/release.sh runs
     # scripts/build.sh), so it needs the Apple toolchain for the macOS
     # targets and Zig for the other four. GitHub-hosted macOS runners
