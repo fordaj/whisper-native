@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#
+# version.sh - print the version of the repository.
+#
+# The version is computed by versioner (see tools/versioner and
+# .versioner.json), so the version of a build and the version of a release
+# can never drift apart.
+#
+# Usage:
+#   scripts/version.sh                 # prints "VERSION=<v>" and "TAG=<t>"
+#   scripts/version.sh --format shell  # prints "export VERSION=..." lines
+#   scripts/version.sh --format json   # prints the raw versioner json
+#
+# Environment:
+#   VERSIONER_BIN        Path to the versioner binary (default: via scripts/env.sh).
+#   VERSIONER_REPO_DIR   Repository to inspect (default: the repository root).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/entry.sh"
+
+FORMAT="text"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --format)
+        [[ $# -ge 2 ]] || {
+            log ERROR "--format requires a value"
+            exit 2
+        }
+        FORMAT="$2"
+        shift 2
+        ;;
+    --format=*)
+        FORMAT="${1#--format=}"
+        shift
+        ;;
+    --help | -h)
+        cat <<'EOF'
+Usage: scripts/version.sh [--format text|shell|json]
+
+Print the version of the repository computed by versioner.
+
+  text   VERSION=<version> and TAG=<tag> lines (default)
+  shell  export VERSION=... and export TAG=... lines
+  json   the raw json document produced by versioner
+EOF
+        exit 0
+        ;;
+    *)
+        log ERROR "unknown argument: $1"
+        exit 2
+        ;;
+    esac
+done
+
+REPO_DIR="${VERSIONER_REPO_DIR:-${REPO_ROOT_DIR:-$SCRIPT_DIR/..}}"
+REPO_DIR="$(cd -- "$REPO_DIR" && pwd)"
+
+if [[ -z "${VERSIONER_BIN:-}" || ! -x "${VERSIONER_BIN:-}" ]]; then
+    log ERROR "no versioner binary found (run tools/versioner/update.sh or set VERSIONER_BIN)"
+    exit 1
+fi
+
+if [[ "$FORMAT" == "json" ]]; then
+    "$VERSIONER_BIN" --repo-dir "$REPO_DIR" --quiet --format json
+    exit 0
+fi
+
+OUTPUT="$("$VERSIONER_BIN" --repo-dir "$REPO_DIR" --quiet)"
+
+VERSION=""
+TAG=""
+while IFS= read -r line; do
+    case "$line" in
+    VERSION=*) VERSION="${line#VERSION=}" ;;
+    TAG=*) TAG="${line#TAG=}" ;;
+    esac
+done <<<"$OUTPUT"
+
+[[ -n "$VERSION" ]] || {
+    log ERROR "could not parse VERSION from the versioner output"
+    exit 1
+}
+[[ -n "$TAG" ]] || {
+    log ERROR "could not parse TAG from the versioner output"
+    exit 1
+}
+
+case "$FORMAT" in
+text)
+    printf 'VERSION=%s\n' "$VERSION"
+    printf 'TAG=%s\n' "$TAG"
+    ;;
+shell)
+    printf 'export VERSION=%s\n' "$VERSION"
+    printf 'export TAG=%s\n' "$TAG"
+    ;;
+*)
+    log ERROR "unknown format: $FORMAT (expected text, shell or json)"
+    exit 2
+    ;;
+esac
