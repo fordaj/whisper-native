@@ -275,13 +275,35 @@ this way.
 
 ## Continuous integration & releases
 
-`.github/workflows/ci.yml` builds all six targets (four via Zig on
-GitHub-hosted Ubuntu runners, two macOS targets on the org's self-hosted
-macOS runner pool) and smoke-tests the Linux x86-64 binary against the
-upstream `jfk.wav` sample with the `ggml-tiny.en` model. Pushing a
-`vX.Y.Z` tag runs the release job, which rebuilds all six targets and
+`.github/workflows/ci.yml` runs entirely on the org's self-hosted
+runners (registered to this repo via `.runner-spawner.json`; see
+`tools/runner-spawner`): the x86_64 macOS runner builds the macOS
+x86_64 target natively plus all four Zig cross targets, and the x86_64
+Windows runner rebuilds and smoke-tests the Windows targets natively.
+The macOS leg also smoke-tests the native binary, runs the model tests
+(`ggml-tiny.en` and `ggml-tiny` against `samples/jfk.wav`), and hosts
+the release job. Pushing a `vX.Y.Z` tag rebuilds all six targets and
 creates a GitHub release with the archives and `checksums.txt` (via
 `scripts/release.sh --from-tag`).
+
+### Self-hosted runners
+
+CI uses the org's self-hosted runner pool (same setup as
+`fordaj/logamuffin`), registered to this repository via
+`.runner-spawner.json` (`.runners/` is git-ignored). The bundled
+runner-spawner lifecycle manager lives in `tools/runner-spawner/`
+(pinned v0.0.1.2.6):
+
+```bash
+source scripts/env.sh
+"$RUNNER_SPAWNER_BIN" create                 # register + install runner01/runner02
+"$RUNNER_SPAWNER_BIN" status                 # health + labels
+"$RUNNER_SPAWNER_BIN" create --dry-run       # preview without touching the network
+```
+
+Labels are auto-assigned (`self-hosted,<os>,<arch>,…`), matching the
+`runs-on: [self-hosted, macOS]` / `[self-hosted, Windows]` entries in
+the workflow.
 
 ## License and attribution
 

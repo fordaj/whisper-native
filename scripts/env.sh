@@ -38,4 +38,7 @@ MINGW*:aarch64 | MSYS*:aarch64 | CYGWIN*:aarch64 | MINGW*:arm64 | MSYS*:arm64 | 
     return 1 2>/dev/null || exit 1
     ;;
 esac
+
+# Anchor the repository-relative tool path to the repo root.
+case "${RUNNER_SPAWNER_BIN:-}" in "" | /*) ;; *) RUNNER_SPAWNER_BIN="$REPO_ROOT_DIR/$RUNNER_SPAWNER_BIN" ;; esac
 set +a
