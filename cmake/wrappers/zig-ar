@@ -1,4 +1,0 @@
-#!/bin/sh
-# Thin wrapper so CMAKE_AR can be a single executable (CMake does not
-# split CMAKE_AR on ';'). Calls `zig ar`.
-exec zig ar "$@"

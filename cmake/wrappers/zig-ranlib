@@ -1,4 +1,0 @@
-#!/bin/sh
-# Thin wrapper so CMAKE_RANLIB can be a single executable (CMake does
-# not split CMAKE_RANLIB on ';'). Calls `zig ranlib`.
-exec zig ranlib "$@"

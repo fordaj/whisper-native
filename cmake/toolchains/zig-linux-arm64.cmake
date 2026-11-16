@@ -10,7 +10,18 @@ set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 
-# Use Zig's binutils so archives match the cross target (host ranlib
-# cannot read ELF/COFF members).
-set(CMAKE_AR "${CMAKE_CURRENT_LIST_DIR}/../wrappers/zig-ar")
-set(CMAKE_RANLIB "${CMAKE_CURRENT_LIST_DIR}/../wrappers/zig-ranlib")
+# Static archives are created with `zig ar rcs` ('s' writes the symbol
+# index). On non-Windows targets CMake honors these (platform modules
+# only set them when undefined). For Windows targets the platform
+# modules set the archive rules unconditionally, so the Windows targets
+# use the CMAKE_AR/CMAKE_RANLIB wrappers from cmake/host-ar.cmake.
+set(CMAKE_C_ARCHIVE_CREATE "zig ar rcs <TARGET> <OBJECTS>")
+set(CMAKE_CXX_ARCHIVE_CREATE "zig ar rcs <TARGET> <OBJECTS>")
+set(CMAKE_C_ARCHIVE_APPEND "zig ar r <TARGET> <OBJECTS>")
+set(CMAKE_CXX_ARCHIVE_APPEND "zig ar r <TARGET> <OBJECTS>")
+set(CMAKE_C_ARCHIVE_FINISH "")
+set(CMAKE_CXX_ARCHIVE_FINISH "")
+
+# Host ar/ranlib wrappers for the Windows platform modules (see
+# cmake/host-ar.cmake).
+include("${CMAKE_CURRENT_LIST_DIR}/../host-ar.cmake")

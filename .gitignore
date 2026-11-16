@@ -45,3 +45,6 @@ __pycache__/
 *.swp
 *.bak
 *.tmp
+
+# Committed wrapper executables (build tooling, not build output)
+!cmake/wrappers/*.exe
