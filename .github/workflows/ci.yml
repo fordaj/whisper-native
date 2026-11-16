@@ -24,8 +24,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: macos-x86_64, runner: macos-13 }
-          - { target: macos-arm64, runner: macos-14 }
+          # GitHub-hosted macOS runners are not available for this
+          # repository (macos-14 jobs are cancelled immediately and
+          # macos-13 queues forever with no runner assigned), so macOS
+          # targets build on the org's self-hosted macOS pool — the
+          # same setup the logamuffin starting CI used.
+          - { target: macos-x86_64, runner: [self-hosted, macOS] }
+          - { target: macos-arm64, runner: [self-hosted, macOS] }
           - { target: linux-x86_64, runner: ubuntu-latest }
           - { target: linux-arm64, runner: ubuntu-latest }
           - { target: windows-x86_64, runner: ubuntu-latest }
@@ -117,8 +122,13 @@ jobs:
     name: Release (tag)
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, test-models]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The release job rebuilds all six targets (scripts/release.sh runs
+    # scripts/build.sh), so it needs the Apple toolchain for the macOS
+    # targets and Zig for the other four. GitHub-hosted macOS runners
+    # are unavailable here (see build matrix above), hence the
+    # self-hosted pool.
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 90
     permissions:
       contents: write
     steps:
@@ -132,11 +142,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          platform=x86_64-linux
+          if command -v zig >/dev/null 2>&1; then
+            echo "zig already present: $(zig version)"
+            exit 0
+          fi
+          case "$(uname -s)-$(uname -m)" in
+            Darwin-x86_64)     platform=x86_64-macos ;;
+            Darwin-arm64)      platform=aarch64-macos ;;
+            Linux-x86_64)      platform=x86_64-linux ;;
+            Linux-aarch64|Linux-arm64) platform=aarch64-linux ;;
+            *) echo "unsupported CI platform: $(uname -s)-$(uname -m)" >&2; exit 2 ;;
+          esac
           url="https://ziglang.org/download/${ZIG_VERSION}/zig-${platform}-${ZIG_VERSION}.tar.xz"
           curl -fsSL --retry 3 -o zig.tar.xz "$url"
           tar -xJf zig.tar.xz
           echo "$PWD/zig-${platform}-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Ensure CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v cmake >/dev/null 2>&1; then
+            cmake --version
+            exit 0
+          fi
+          brew install cmake
 
       - name: Build, package and publish release
         shell: bash
