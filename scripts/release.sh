@@ -106,6 +106,8 @@ cd "$REPO_ROOT"
 SCRIPT_DIR="$REPO_ROOT/scripts"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/entry.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/upstream.sh"
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 HEAD_SHORT="$(git rev-parse --short HEAD)"
@@ -171,10 +173,8 @@ if [[ "$DRY_RUN" -ne 1 ]] && gh release view "$TAG" >/dev/null 2>&1; then
 fi
 
 # --- Verify pinned upstream submodule -----------------------------------
-UPSTREAM_HEAD="$(git -C "$WHISPER_CPP_DIR" rev-parse HEAD 2>/dev/null)" \
-    || die "upstream submodule not initialized — run: git submodule update --init $WHISPER_CPP_DIR"
-[[ "$UPSTREAM_HEAD" == "$WHISPER_CPP_COMMIT" ]] || die "upstream submodule at $UPSTREAM_HEAD, expected $WHISPER_CPP_COMMIT ($WHISPER_CPP_VERSION)"
-log "upstream: whisper.cpp $WHISPER_CPP_VERSION ($UPSTREAM_HEAD)"
+verify_upstream
+log "upstream: whisper.cpp $WHISPER_CPP_VERSION ($WHISPER_CPP_COMMIT)"
 
 # --- Cross-compile release executables ----------------------------------
 log "cross-compiling release executables (TAG=$TAG) via scripts/build.sh..."

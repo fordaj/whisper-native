@@ -27,6 +27,8 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/entry.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/upstream.sh"
 
 # ============================================================
 # Configuration
@@ -63,20 +65,6 @@ echo
 # ============================================================
 # Verify the pinned upstream submodule
 # ============================================================
-verify_upstream() {
-    local dir="$REPO_ROOT/$WHISPER_CPP_DIR"
-    local head
-    if ! head="$(git -C "$dir" rev-parse HEAD 2>/dev/null)"; then
-        log ERROR "upstream submodule not initialized — run: git submodule update --init $WHISPER_CPP_DIR"
-        exit 1
-    fi
-    if [[ "$head" != "$WHISPER_CPP_COMMIT" ]]; then
-        log ERROR "upstream submodule at $head"
-        log ERROR "this repository pins whisper.cpp $WHISPER_CPP_VERSION ($WHISPER_CPP_COMMIT)"
-        log ERROR "run: git -C $WHISPER_CPP_DIR checkout $WHISPER_CPP_COMMIT"
-        exit 1
-    fi
-}
 verify_upstream
 
 # ============================================================
