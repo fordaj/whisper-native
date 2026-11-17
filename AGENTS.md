@@ -16,7 +16,8 @@ no upstream sources are forked or patched.
   plus `cmake/wrappers/zig-*`), native clang++ on macOS, environment cascade
   (`scripts/env.sh` + `scripts/.common.env` + `scripts/.<platform>.env`),
   platform-specific output dirs (`build/<mode>/<platform>/`), release
-  packaging (`scripts/release.sh`), git-tag versioning (`scripts/version.sh`).
+  packaging (`scripts/release.sh`), upstream-parity versioning
+  (`scripts/version.sh`: the project version IS WHISPER_CPP_VERSION).
 - **Upstream is a pinned submodule** (`third_party/whisper.cpp`). Never edit
   files inside it; bump the gitlink + `WHISPER_CPP_VERSION`/`WHISPER_CPP_COMMIT`
   in `scripts/.common.env` together. `scripts/build.sh` and `release.sh`
@@ -42,7 +43,8 @@ scripts/build.sh                                      # six targets, release
 BUILD_MODE=debug TARGETS="macos-arm64" scripts/build.sh
 scripts/test_models.sh                                # English + multilingual smoke test
 scripts/release.sh --dry-run                          # build + pack, nothing remote
-scripts/version.sh                                    # TAG=/VERSION= from git tags
+scripts/release.sh                                    # pin → tag v<upstream>, push, publish
+scripts/version.sh                                    # TAG=/VERSION= (= upstream pin)
 ```
 
 ## Done means

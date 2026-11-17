@@ -55,12 +55,12 @@ Not supported: 32-bit platforms, BSD, Android/iOS (out of scope), GPUs
 Grab the archive for your platform from the GitHub Releases page, e.g.:
 
 ```
-WhisperNative_v0.1.0_linux-x86_64.tar.gz
-WhisperNative_v0.1.0_linux-arm64.tar.gz
-WhisperNative_v0.1.0_macos-x86_64.tar.gz
-WhisperNative_v0.1.0_macos-arm64.tar.gz
-WhisperNative_v0.1.0_windows-x86_64.zip
-WhisperNative_v0.1.0_windows-arm64.zip
+WhisperNative_v1.9.5_linux-x86_64.tar.gz
+WhisperNative_v1.9.5_linux-arm64.tar.gz
+WhisperNative_v1.9.5_macos-x86_64.tar.gz
+WhisperNative_v1.9.5_macos-arm64.tar.gz
+WhisperNative_v1.9.5_windows-x86_64.zip
+WhisperNative_v1.9.5_windows-arm64.zip
 ```
 
 Verify it against `checksums.txt` (published alongside the archives):
@@ -208,18 +208,30 @@ scripts/test_models.sh   # downloads tiny.en + tiny once into build/models/,
                           # transcribes samples/jfk.wav, checks the result
 ```
 
-### Release archives
+### Releases (version parity with upstream)
+
+whisper-native keeps version parity with upstream whisper.cpp — the
+project version IS the pinned upstream version. So a whisper-native
+release `v1.9.5` always builds upstream `v1.9.5`, and `scripts/release.sh`
+needs no version argument: it derives the tag from `WHISPER_CPP_VERSION`
+(`scripts/.common.env`).
 
 ```bash
 scripts/release.sh --dry-run       # build + pack only, nothing remote
-scripts/release.sh v0.1.0          # tag v0.1.0, build, pack, tag+release
-scripts/release.sh --from-tag      # HEAD already on the release tag (CI)
+scripts/release.sh                 # verify, build, pack, tag v1.9.5, push, publish
+scripts/release.sh --from-tag      # HEAD already on the pinned tag (CI)
 ```
 
 `release.sh` verifies the upstream pin, cross-compiles, stages `dist/`,
 writes `WHISPER-NATIVE-BUILDINFO.txt` into each archive, packs
 `WhisperNative_<tag>_<platform>.tar.gz` (`.zip` on Windows), generates
-`checksums.txt`, and creates the GitHub release (unless `--dry-run`).
+`checksums.txt`, creates the annotated tag on HEAD, pushes it, and
+creates the GitHub release. It is idempotent: an existing GitHub
+release is left untouched. One release per pinned upstream version;
+re-releasing the same version means deleting the tag/release first or
+updating the pin. Pushing the tag also triggers the CI release job
+(`--from-tag`), which rebuilds everything on the self-hosted macOS
+runner and skips publication if the release already exists.
 
 ## Configuring optional acceleration backends
 
@@ -266,6 +278,10 @@ Notes:
 4. Re-run `scripts/build.sh` and `scripts/test_models.sh`, inspect the
    produced `WHISPER-NATIVE-BUILDINFO.txt` in the archives, and check
    upstream's `WHISPER_VERSION_*` in their `CMakeLists.txt` matches the tag.
+5. Commit, then run `scripts/release.sh` — it tags the merge commit with
+   the upstream version (e.g. `v1.9.6`), pushes the tag, and publishes
+   the release. Version parity means no separate version bookkeeping is
+   needed for releases.
 
 The build is reusable for future upstream executables: add the upstream
 CMake target name to `WHISPER_EXECUTABLES` in `scripts/.common.env` and
@@ -282,9 +298,9 @@ x86_64 target natively plus all four Zig cross targets, and the x86_64
 Windows runner rebuilds and smoke-tests the Windows targets natively.
 The macOS leg also smoke-tests the native binary, runs the model tests
 (`ggml-tiny.en` and `ggml-tiny` against `samples/jfk.wav`), and hosts
-the release job. Pushing a `vX.Y.Z` tag rebuilds all six targets and
-creates a GitHub release with the archives and `checksums.txt` (via
-`scripts/release.sh --from-tag`).
+the release job. Pushing a `vX.Y.Z` tag (made by `scripts/release.sh`)
+rebuilds all six targets and creates the GitHub release if it does not
+already exist (via `scripts/release.sh --from-tag`).
 
 ### Self-hosted runners
 

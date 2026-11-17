@@ -2,20 +2,21 @@
 # scripts/release.sh - whisper-native release (adapted from fordaj/logamuffin's
 # release.sh; same flow, Zig + CMake instead of a hand-written C++ build).
 #
-# Verifies the pinned upstream whisper.cpp submodule, cross-compiles the
-# release executables via scripts/build.sh (Zig `zig c++` for the Linux and
-# Windows targets, native clang++ for macOS), packs each platform into
-# WhisperNative_<tag>_<platform>.tar.gz (.zip on Windows; flat archives:
-# executables + README + LICENSE + upstream LICENSE + build metadata),
-# generates SHA-256 checksums, tags HEAD, and publishes a GitHub release.
+# whisper-native keeps version parity with upstream whisper.cpp: the
+# release tag IS the pinned upstream version (WHISPER_CPP_VERSION in
+# scripts/.common.env). "scripts/release.sh" therefore needs no version
+# argument — it tags HEAD with e.g. v1.9.5, builds, packages, pushes the
+# tag, and publishes the GitHub release. Pushing a vX.Y.Z tag also
+# triggers the GitHub Actions release workflow (.github/workflows/ci.yml,
+# "release" job) which rebuilds on the self-hosted macOS runner and
+# publishes the release if it does not already exist.
 #
 # Usage:
-#   scripts/release.sh v0.1.0   # tag HEAD as v0.1.0, then build + release
-#   scripts/release.sh --from-tag
-#                               # HEAD must already be on tag vX.Y.Z
-#                               # (used by CI on tag pushes); no tag is created
-#   scripts/release.sh --dry-run [v0.1.0]
-#                               # build + pack only; touches nothing remote
+#   scripts/release.sh              # tag HEAD as WHISPER_CPP_VERSION (e.g.
+#                                   # v1.9.5), build, pack, push tag, release
+#   scripts/release.sh --from-tag   # HEAD must already be on the pinned tag
+#                                   # (used by CI on tag pushes); no tag is created
+#   scripts/release.sh --dry-run    # build + pack only; touches nothing remote
 #
 # Prerequisites: zig, cmake, git, tar, zip, and (for the real release) gh
 # authenticated via `gh auth login`. The working tree must be clean; HEAD
@@ -25,29 +26,38 @@ set -euo pipefail
 
 DRY_RUN=0
 FROM_TAG=0
-REQ_TAG=""
 
 usage() {
     cat <<'EOF'
-Usage: scripts/release.sh [--dry-run] [--from-tag] [vX.Y.Z]
+Usage: scripts/release.sh [--dry-run] [--from-tag]
 
-Compute/verify the release tag, cross-compile via scripts/build.sh
-(Zig + native clang) into build/release/<platform>/whisper-cli[.exe]
-and whisper-server[.exe], stage each into dist/<platform>/ with
-README.md, LICENSE, the upstream whisper.cpp LICENSE and a
-WHISPER-NATIVE-BUILDINFO.txt, pack into
-WhisperNative_<tag>_<platform>.tar.gz (.zip on Windows), create an
-annotated tag (unless --from-tag), push it, and create a GitHub release
-with the archives + SHA-256 checksums.
+Release whisper-native at the version pinned in scripts/.common.env
+(WHISPER_CPP_VERSION, e.g. v1.9.5 — parity with upstream whisper.cpp):
+
+  1. verifies the pinned upstream submodule and the clean tree,
+  2. cross-compiles via scripts/build.sh (Zig + native clang) into
+     build/release/<platform>/whisper-cli[.exe] and whisper-server[.exe],
+  3. stages each platform into dist/<platform>/ (executables + README.md +
+     LICENSE + the upstream whisper.cpp LICENSE + WHISPER-NATIVE-BUILDINFO.txt),
+  4. packs WhisperNative_<tag>_<platform>.tar.gz (.zip on Windows) and
+     dist/checksums.txt,
+  5. creates an annotated tag on HEAD (unless --from-tag), pushes it, and
+     creates the GitHub release with the archives + checksums
+     (idempotent: an existing release is left untouched).
 
 Flags:
   --dry-run, -n   Build + pack, but do not tag/push/release.
-  --from-tag      HEAD must already be on a vX.Y.Z tag (CI tag pushes);
+  --from-tag      HEAD must already be on the pinned tag (CI tag pushes);
                   skips creating/pushing the tag.
   --help, -h      Show this help.
 
 Env:
   BUILD_MODE   Passed through to scripts/build.sh (default: release).
+
+The tag tracks the pinned upstream version and can only be released once:
+to re-release the same upstream version, delete the tag and the GitHub
+release first, or update the pin in scripts/.common.env (see README.md,
+"Updating the upstream whisper.cpp version").
 EOF
 }
 
@@ -64,10 +74,6 @@ while [[ $# -gt 0 ]]; do
     --help | -h)
         usage
         exit 0
-        ;;
-    v[0-9]*)
-        REQ_TAG="$1"
-        shift
         ;;
     *)
         echo "release.sh: unknown argument: $1" >&2
@@ -109,26 +115,18 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     log "DRY RUN: no tag/push/release will happen"
 fi
 
-# --- Resolve TAG -------------------------------------------------------
-if [[ -n "$REQ_TAG" ]]; then
-    TAG="$REQ_TAG"
-    if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        die "tag looks invalid: '$TAG' (expected vX.Y.Z)"
-    fi
-    if [[ "$FROM_TAG" -eq 1 ]]; then
-        die "--from-tag and an explicit tag are mutually exclusive"
-    fi
-elif [[ "$FROM_TAG" -eq 1 ]]; then
-    TAG="$(git describe --tags --exact-match --match 'v[0-9]*' HEAD 2>/dev/null)" \
-        || die "--from-tag given but HEAD is not on a vX.Y.Z tag"
-    if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        die "--from-tag: tag '$TAG' does not match vX.Y.Z"
-    fi
-else
-    die "no tag given. Pass an explicit tag (e.g. scripts/release.sh v0.1.0) or --from-tag in CI."
-fi
+# --- Resolve TAG (parity with the pinned upstream whisper.cpp) ---------
+TAG="$WHISPER_CPP_VERSION"
 VERSION="${TAG#v}"
-log "VERSION=$VERSION  TAG=$TAG"
+if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    die "WHISPER_CPP_VERSION '$TAG' does not match vX.Y.Z — fix scripts/.common.env"
+fi
+if [[ "$FROM_TAG" -eq 1 ]]; then
+    HEAD_TAG="$(git describe --tags --exact-match --match 'v[0-9]*' HEAD 2>/dev/null)" \
+        || die "--from-tag given but HEAD is not on a tag"
+    [[ "$HEAD_TAG" == "$TAG" ]] || die "--from-tag: HEAD is on '$HEAD_TAG', expected pinned tag '$TAG'"
+fi
+log "VERSION=$VERSION  TAG=$TAG (parity with upstream $WHISPER_CPP_VERSION)"
 
 # --- Precondition: clean working tree ---------------------------------
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -150,12 +148,25 @@ if ! git fetch origin --tags 2>/dev/null; then
 fi
 
 # --- Tag must not already exist ----------------------------------------
-if [[ "$FROM_TAG" -eq 0 ]]; then
+if [[ "$FROM_TAG" -eq 0 && "$DRY_RUN" -ne 1 ]]; then
     if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
-        die "tag $TAG already exists locally"
+        die "tag $TAG already exists locally. whisper-native releases track the pinned upstream version;"$'\n'"      delete the tag (and the GitHub release) to re-release it, or update the pin in scripts/.common.env first."
     fi
     if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-        die "tag $TAG already exists on origin"
+        die "tag $TAG already exists on origin. whisper-native releases track the pinned upstream version;"$'\n'"      delete the tag (and the GitHub release) to re-release it, or update the pin in scripts/.common.env first."
+    fi
+fi
+
+# --- Fail fast if the release already exists ---------------------------
+# parity: one release per pinned upstream version. In --from-tag mode
+# (CI on tag pushes) an existing release means the release was created
+# elsewhere (e.g. locally via scripts/release.sh) — no-op cleanly.
+if [[ "$DRY_RUN" -ne 1 ]] && gh release view "$TAG" >/dev/null 2>&1; then
+    if [[ "$FROM_TAG" -eq 1 ]]; then
+        log "GitHub release $TAG already exists; nothing to do"
+        exit 0
+    else
+        die "GitHub release $TAG already exists (tag absent)."$'\n'"      Update the pin in scripts/.common.env or delete the release first."
     fi
 fi
 
@@ -281,14 +292,17 @@ fi
 
 if [[ "$FROM_TAG" -eq 0 ]]; then
     log "creating annotated tag $TAG..."
-    git tag -a "$TAG" -m "whisper-native $TAG"
+    git tag -a "$TAG" -m "whisper-native $TAG (whisper.cpp $WHISPER_CPP_VERSION)"
 
     log "pushing tag $TAG..."
     git push origin "$TAG"
 fi
 
+# Idempotency: if the release already exists (e.g. created from another
+# machine or a previous run), keep it — do not re-upload or overwrite.
 if gh release view "$TAG" >/dev/null 2>&1; then
-    die "GitHub release $TAG already exists (upload assets manually with: gh release upload $TAG dist/WhisperNative_* dist/checksums.txt --clobber)"
+    log "GitHub release $TAG already exists; leaving it untouched (assets not re-uploaded)"
+    exit 0
 fi
 
 log "creating GitHub release $TAG with ${#archives[@]} archives + checksums..."
