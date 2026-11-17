@@ -1,0 +1,8 @@
+# Git attributes: never normalize binary payloads on Windows checkouts.
+*.exe binary
+*.lib binary
+*.zip binary
+*.gz binary
+*.xz binary
+*.png binary
+*.pdb binary

@@ -1,0 +1,251 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# This repository uses the org's self-hosted runner pool (same setup as
+# fordaj/logamuffin): one x86_64 macOS runner and one x86_64 Windows
+# runner, registered to this repository via .runner-spawner.json
+# (tools/runner-spawner). GitHub-hosted runners are not used.
+env:
+  ZIG_VERSION: 0.17.0
+  CMAKE_VERSION: 3.30.5
+
+jobs:
+  build-macos:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native macOS build (Apple Clang, -arch x86_64).
+          - { target: macos-x86_64 }
+          # Zig cross-compiles (these also build fine on macOS; built
+          # here so the release pipeline always has the Apple toolchain
+          # available in one job).
+          - { target: linux-x86_64 }
+          - { target: linux-arm64 }
+          - { target: windows-x86_64 }
+          - { target: windows-arm64 }
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (with upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Ensure Zig and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v zig >/dev/null 2>&1; then
+            url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-macos-${ZIG_VERSION}.tar.xz"
+            curl -fsSL --retry 3 "$url" | tar -xJ
+            echo "$PWD/zig-x86_64-macos-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          fi
+          if ! command -v cmake >/dev/null 2>&1; then
+            url="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-macos-universal.tar.gz"
+            curl -fsSL --retry 3 "$url" | tar -xz
+            echo "$PWD/cmake-${CMAKE_VERSION}-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --version
+          zig version
+          clang++ --version
+
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        run: BUILD_MODE=release TARGETS="${{ matrix.target }}" ./scripts/build.sh
+
+      - name: Smoke test (macos-x86_64)
+        if: matrix.target == 'macos-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          file build/release/macos-x86_64/whisper-cli
+          build/release/macos-x86_64/whisper-cli --help >/dev/null
+          build/release/macos-x86_64/whisper-cli --version
+
+      - name: Upload executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-native-${{ matrix.target }}
+          path: |
+            build/release/${{ matrix.target }}/whisper-cli*
+            build/release/${{ matrix.target }}/whisper-server*
+          if-no-files-found: error
+          compression-level: 0
+
+  build-windows:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: windows-x86_64 }
+          - { target: windows-arm64 }
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (with upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Ensure Zig and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v zig >/dev/null 2>&1; then
+            url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-windows-${ZIG_VERSION}.zip"
+            curl -fsSL --retry 3 -o zig.zip "$url"
+            powershell -NoProfile -Command "Expand-Archive -Force 'zig.zip' ."
+            echo "$PWD/zig-x86_64-windows-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          fi
+          if ! command -v cmake >/dev/null 2>&1; then
+            url="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-windows-x86_64.zip"
+            curl -fsSL --retry 3 -o cmake.zip "$url"
+            powershell -NoProfile -Command "Expand-Archive -Force 'cmake.zip' ."
+            echo "$PWD/cmake-${CMAKE_VERSION}-windows-x86_64/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --version
+          zig version
+
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        run: BUILD_MODE=release TARGETS="${{ matrix.target }}" ./scripts/build.sh
+
+      - name: Smoke test (windows-x86_64, native)
+        if: matrix.target == 'windows-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          build/release/windows-x86_64/whisper-cli.exe --help >/dev/null
+          build/release/windows-x86_64/whisper-cli.exe --version
+
+      - name: Upload executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-native-windows-ci-${{ matrix.target }}
+          path: |
+            build/release/${{ matrix.target }}/whisper-cli.exe
+            build/release/${{ matrix.target }}/whisper-server.exe
+          if-no-files-found: error
+          compression-level: 0
+
+  test-models-windows:
+    name: Model smoke test (windows-x86_64)
+    needs: build-windows
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (with upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download windows-x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-native-windows-ci-windows-x86_64
+          path: build/release/windows-x86_64
+
+      - name: Restore model cache
+        uses: actions/cache@v4
+        with:
+          path: build/models
+          key: whisper-models-tiny-tiny.en-v1
+
+      - name: Run model smoke tests (English + multilingual)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x build/release/windows-x86_64/whisper-cli.exe
+          WHISPER_CLI="$PWD/build/release/windows-x86_64/whisper-cli.exe" ./scripts/test_models.sh
+
+  test-models:
+    name: Model smoke test (macos-x86_64)
+    needs: build-macos
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (with upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download macos-x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-native-macos-x86_64
+          path: build/release/macos-x86_64
+
+      - name: Restore model cache
+        uses: actions/cache@v4
+        with:
+          path: build/models
+          key: whisper-models-tiny-tiny.en-v1
+
+      - name: Run model smoke tests (English + multilingual)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x build/release/macos-x86_64/whisper-cli
+          WHISPER_CLI="$PWD/build/release/macos-x86_64/whisper-cli" ./scripts/test_models.sh
+
+  release:
+    name: Release (tag)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-macos, build-windows, test-models, test-models-windows]
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (with upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Ensure Zig and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v zig >/dev/null 2>&1; then
+            url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-macos-${ZIG_VERSION}.tar.xz"
+            curl -fsSL --retry 3 "$url" | tar -xJ
+            echo "$PWD/zig-x86_64-macos-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          fi
+          if ! command -v cmake >/dev/null 2>&1; then
+            url="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-macos-universal.tar.gz"
+            curl -fsSL --retry 3 "$url" | tar -xz
+            echo "$PWD/cmake-${CMAKE_VERSION}-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Build, package and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/release.sh --from-tag

@@ -1,49 +1,14 @@
-# Prerequisites
-*.d
+# Generated build/release outputs
+build/
+dist/
+site/
+.runners/
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# Downloaded model weights (never committed, never bundled in archives)
+build/models/
+models/*.bin
 
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Build directories
-[Bb]uild/
-[Bb]uild-*/
-cmake-build-*/
-
-# CMake generated files
+# CMake
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
@@ -51,18 +16,35 @@ Makefile
 install_manifest.txt
 compile_commands.json
 
-# Temporary files
-*.tmp
+# Object files and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Executables (out of tree; third_party ships sources only)
+*.exe
+*.out
+*.app
+
+# Tool/OS noise
+.DS_Store
+.logs/
 *.log
-*.bak
+
+# Python (test tooling)
+__pycache__/
+*.py[cod]
+.venv/
+
+# Editors
 *.swp
+*.bak
+*.tmp
 
-# vcpkg
-vcpkg_installed/
-
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
-.cache/
+# Committed wrapper executables (build tooling, not build output)
+!cmake/wrappers/*.exe
